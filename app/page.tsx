@@ -1,65 +1,96 @@
-type Player = {
+type PlayerBasic = {
   id: number;
-  name: string;
+  fullName: string;
+  birthDate: string;
 };
 
-const players: Player[] = [
-  { id: 660271, name: "Shohei Ohtani" },
-  { id: 545361, name: "Mike Trout" },
-  { id: 592450, name: "Aaron Judge" },
-];
+type ProcessedPlayer = {
+  name: string;
+  age: number;
+  homeRuns: number;
+};
 
-async function getPlayerStats(playerId: number) {
+async function getActivePlayers(): Promise<PlayerBasic[]> {
+  const res = await fetch(
+    "https://statsapi.mlb.com/api/v1/sports/1/players?active=true",
+    { cache: "no-store" }
+  );
+
+  const data = await res.json();
+  return data.people;
+}
+
+async function getCareerHR(playerId: number) {
   const res = await fetch(
     `https://statsapi.mlb.com/api/v1/people/${playerId}/stats?stats=career&group=hitting`,
     { cache: "no-store" }
   );
 
-  if (!res.ok) {
-    throw new Error("Failed to fetch data");
-  }
+  const data = await res.json();
+  const stats = data.stats[0]?.splits[0]?.stat;
+  return Number(stats?.homeRuns ?? 0);
+}
 
-  return res.json();
+function calculateAge(birthDate: string) {
+  const birth = new Date(birthDate);
+  const today = new Date();
+  let age = today.getFullYear() - birth.getFullYear();
+  const m = today.getMonth() - birth.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
+    age--;
+  }
+  return age;
 }
 
 export default async function Home() {
-  const playerData = await Promise.all(
-    players.map(async (player) => {
-      const data = await getPlayerStats(player.id);
-      const stats = data.stats[0]?.splits[0]?.stat;
-      const homeRuns = Number(stats?.homeRuns ?? 0);
+  const activePlayers = await getActivePlayers();
+
+  // とりあえず200人だけ取得（負荷対策）
+  const samplePlayers = activePlayers.slice(0, 8000);
+
+  const playersWithHR: ProcessedPlayer[] = await Promise.all(
+    samplePlayers.map(async (player) => {
+      const homeRuns = await getCareerHR(player.id);
 
       return {
-        name: player.name,
+        name: player.fullName,
+        age: calculateAge(player.birthDate),
         homeRuns,
-        remainingTo500: 500 - homeRuns,
       };
     })
   );
 
+  // 500HRに近い順（HR多い順）
+  const topTo500 = playersWithHR
+    .filter((p) => p.homeRuns > 0)
+    .sort((a, b) => b.homeRuns - a.homeRuns)
+    .slice(0, 5);
+
+  // 350未満で350に近い順
+  const near350 = playersWithHR
+    .filter((p) => p.homeRuns < 350)
+    .sort((a, b) => b.homeRuns - a.homeRuns)
+    .slice(0, 5);
+
   return (
     <main style={{ padding: "40px", fontFamily: "sans-serif" }}>
-      <h1 style={{ fontSize: "28px", marginBottom: "20px" }}>
-        500HRに近づく現役選手
-      </h1>
+      <h1>現役選手 HR分析</h1>
 
-      <div style={{ display: "flex", gap: "20px" }}>
-        {playerData.map((player) => (
-          <div
-            key={player.name}
-            style={{
-              border: "1px solid #ccc",
-              padding: "20px",
-              borderRadius: "12px",
-              width: "220px",
-            }}
-          >
-            <h2>{player.name}</h2>
-            <p>通算HR: {player.homeRuns}</p>
-            <p>500HRまであと: {player.remainingTo500}本</p>
-          </div>
-        ))}
-      </div>
+      <h2>500HRに最も近い5人</h2>
+      {topTo500.map((p) => (
+        <div key={p.name}>
+          {p.name} / {p.age}歳 / {p.homeRuns}本
+        </div>
+      ))}
+
+      <h2 style={{ marginTop: "40px" }}>
+        350HR未満で最も近い5人
+      </h2>
+      {near350.map((p) => (
+        <div key={p.name}>
+          {p.name} / {p.age}歳 / {p.homeRuns}本
+        </div>
+      ))}
     </main>
   );
 }
